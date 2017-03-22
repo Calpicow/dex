@@ -290,7 +290,7 @@ func (r responseTest) run(t *testing.T) {
 		t.Fatalf("parse test time: %v", err)
 	}
 
-	conn, err := c.openConnector(logrus.New())
+	conn, err := c.openConnectorP(logrus.New())
 	if err != nil {
 		t.Fatal(err)
 	}
