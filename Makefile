@@ -87,7 +87,7 @@ bin/protoc-gen-go:
 
 .PHONY: check-go-version
 check-go-version:
-	@./scripts/check-go-version
+	-@./scripts/check-go-version
 
 clean: clean-release
 	@rm -rf bin/

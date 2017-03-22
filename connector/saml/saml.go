@@ -2,10 +2,12 @@
 package saml
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
 	"errors"
@@ -14,12 +16,15 @@ import (
 	"strings"
 	"time"
 
+	ldap2 "gopkg.in/ldap.v2"
+
 	"github.com/Sirupsen/logrus"
 	"github.com/beevik/etree"
 	dsig "github.com/russellhaering/goxmldsig"
 	"github.com/russellhaering/goxmldsig/etreeutils"
 
 	"github.com/coreos/dex/connector"
+	"github.com/coreos/dex/connector/ldap"
 )
 
 const (
@@ -115,6 +120,8 @@ type Config struct {
 	//		urn:oasis:names:tc:SAML:2.0:nameid-format:persistent
 	//
 	NameIDPolicyFormat string `json:"nameIDPolicyFormat"`
+
+	LDAP *ldap.Config `json:"ldap"`
 }
 
 type certStore struct {
@@ -131,7 +138,14 @@ func (c *Config) Open(logger logrus.FieldLogger) (connector.Connector, error) {
 	return c.openConnector(logger)
 }
 
-func (c *Config) openConnector(logger logrus.FieldLogger) (*provider, error) {
+func (c *Config) openConnector(logger logrus.FieldLogger) (interface {
+	connector.SAMLConnector
+	connector.RefreshConnector
+}, error) {
+	return c.openConnectorP(logger)
+}
+
+func (c *Config) openConnectorP(logger logrus.FieldLogger) (*provider, error) {
 	requiredFields := []struct {
 		name, val string
 	}{
@@ -154,6 +168,16 @@ func (c *Config) openConnector(logger logrus.FieldLogger) (*provider, error) {
 		return nil, fmt.Errorf("missing required fields %q", missing)
 	}
 
+	var ldapConnector *ldap.LDAPConnector
+
+	if c.LDAP != nil {
+		ldapConn, err := c.LDAP.OpenConnector(logger)
+		if err != nil {
+			return nil, err
+		}
+		ldapConnector = ldapConn.(*ldap.LDAPConnector)
+	}
+
 	p := &provider{
 		entityIssuer: c.EntityIssuer,
 		ssoIssuer:    c.SSOIssuer,
@@ -167,6 +191,8 @@ func (c *Config) openConnector(logger logrus.FieldLogger) (*provider, error) {
 		logger:       logger,
 
 		nameIDPolicyFormat: c.NameIDPolicyFormat,
+
+		ldap: ldapConnector,
 	}
 
 	if p.nameIDPolicyFormat == "" {
@@ -239,10 +265,15 @@ type provider struct {
 	nameIDPolicyFormat string
 
 	logger logrus.FieldLogger
+	ldap   *ldap.LDAPConnector
+}
+
+type refreshData struct {
+	Username string      `json:"username"`
+	Entry    ldap2.Entry `json:"entry"`
 }
 
 func (p *provider) POSTData(s connector.Scopes, id string) (action, value string, err error) {
-
 	r := &authnRequest{
 		ProtocolBinding: bindingPOST,
 		ID:              id,
@@ -350,8 +381,21 @@ func (p *provider) HandlePOST(s connector.Scopes, samlResponse, inResponseTo str
 		return ident, fmt.Errorf("no attribute with name %q: %s", p.usernameAttr, attributes.names())
 	}
 
+	var user ldap2.Entry
+
+	if p.ldap != nil {
+		user = ldap2.Entry{DN: fmt.Sprintf("%s=%s,%s", p.ldap.Config.UserSearch.IDAttr, ident.UserID, p.ldap.Config.UserSearch.BaseDN)}
+	}
+
 	if s.Groups && p.groupsAttr != "" {
-		if p.groupsDelim != "" {
+		if p.ldap != nil && p.groupsAttr == "ldap" && p.groupsDelim == "ldap" {
+			groups, err := p.ldap.Groups(nil, user)
+			if err != nil {
+				return ident, err
+			}
+
+			ident.Groups = groups
+		} else if p.groupsDelim != "" {
 			groupsStr, ok := attributes.get(p.groupsAttr)
 			if !ok {
 				return ident, fmt.Errorf("no attribute with name %q: %s", p.groupsAttr, attributes.names())
@@ -367,7 +411,23 @@ func (p *provider) HandlePOST(s connector.Scopes, samlResponse, inResponseTo str
 		}
 	}
 
+	if p.ldap != nil && s.OfflineAccess {
+		refresh := refreshData{
+			Username: ident.UserID,
+			Entry:    user,
+		}
+		// Encode entry for follow up requests such as the groups query and
+		// refresh attempts.
+		if ident.ConnectorData, err = json.Marshal(refresh); err != nil {
+			return connector.Identity{}, fmt.Errorf("ldap: marshal entry: %v", err)
+		}
+	}
+
 	return ident, nil
+}
+
+func (p *provider) Refresh(ctx context.Context, s connector.Scopes, ident connector.Identity) (connector.Identity, error) {
+	return p.ldap.Refresh(ctx, s, ident)
 }
 
 // Validate that the StatusCode of the Response is success.

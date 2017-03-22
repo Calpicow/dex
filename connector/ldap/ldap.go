@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"strings"
 
 	"gopkg.in/ldap.v2"
 
@@ -206,10 +207,10 @@ func (c *Config) OpenConnector(logger logrus.FieldLogger) (interface {
 	if !ok {
 		return nil, fmt.Errorf("userSearch.Scope unknown value %q", c.GroupSearch.Scope)
 	}
-	return &ldapConnector{*c, userSearchScope, groupSearchScope, tlsConfig, logger}, nil
+	return &LDAPConnector{*c, userSearchScope, groupSearchScope, tlsConfig, logger}, nil
 }
 
-type ldapConnector struct {
+type LDAPConnector struct {
 	Config
 
 	userSearchScope  int
@@ -221,14 +222,14 @@ type ldapConnector struct {
 }
 
 var (
-	_ connector.PasswordConnector = (*ldapConnector)(nil)
-	_ connector.RefreshConnector  = (*ldapConnector)(nil)
+	_ connector.PasswordConnector = (*LDAPConnector)(nil)
+	_ connector.RefreshConnector  = (*LDAPConnector)(nil)
 )
 
 // do initializes a connection to the LDAP directory and passes it to the
 // provided function. It then performs appropriate teardown or reuse before
 // returning.
-func (c *ldapConnector) do(ctx context.Context, f func(c *ldap.Conn) error) error {
+func (c *LDAPConnector) do(ctx context.Context, f func(c *ldap.Conn) error) error {
 	// TODO(ericchiang): support context here
 	var (
 		conn *ldap.Conn
@@ -268,7 +269,7 @@ func getAttr(e ldap.Entry, name string) string {
 	return ""
 }
 
-func (c *ldapConnector) identityFromEntry(user ldap.Entry) (ident connector.Identity, err error) {
+func (c *LDAPConnector) identityFromEntry(user ldap.Entry) (ident connector.Identity, err error) {
 	// If we're missing any attributes, such as email or ID, we want to report
 	// an error rather than continuing.
 	missing := []string{}
@@ -296,7 +297,7 @@ func (c *ldapConnector) identityFromEntry(user ldap.Entry) (ident connector.Iden
 	return ident, nil
 }
 
-func (c *ldapConnector) userEntry(conn *ldap.Conn, username string) (user ldap.Entry, found bool, err error) {
+func (c *LDAPConnector) userEntry(conn *ldap.Conn, username string) (user ldap.Entry, found bool, err error) {
 
 	filter := fmt.Sprintf("(%s=%s)", c.UserSearch.Username, ldap.EscapeFilter(username))
 	if c.UserSearch.Filter != "" {
@@ -336,7 +337,7 @@ func (c *ldapConnector) userEntry(conn *ldap.Conn, username string) (user ldap.E
 	}
 }
 
-func (c *ldapConnector) Login(ctx context.Context, s connector.Scopes, username, password string) (ident connector.Identity, validPass bool, err error) {
+func (c *LDAPConnector) Login(ctx context.Context, s connector.Scopes, username, password string) (ident connector.Identity, validPass bool, err error) {
 	var (
 		// We want to return a different error if the user's password is incorrect vs
 		// if there was an error.
@@ -381,7 +382,7 @@ func (c *ldapConnector) Login(ctx context.Context, s connector.Scopes, username,
 	}
 
 	if s.Groups {
-		groups, err := c.groups(ctx, user)
+		groups, err := c.Groups(ctx, user)
 		if err != nil {
 			return connector.Identity{}, false, fmt.Errorf("ldap: failed to query groups: %v", err)
 		}
@@ -403,7 +404,7 @@ func (c *ldapConnector) Login(ctx context.Context, s connector.Scopes, username,
 	return ident, true, nil
 }
 
-func (c *ldapConnector) Refresh(ctx context.Context, s connector.Scopes, ident connector.Identity) (connector.Identity, error) {
+func (c *LDAPConnector) Refresh(ctx context.Context, s connector.Scopes, ident connector.Identity) (connector.Identity, error) {
 	var data refreshData
 	if err := json.Unmarshal(ident.ConnectorData, &data); err != nil {
 		return ident, fmt.Errorf("ldap: failed to unamrshal internal data: %v", err)
@@ -424,7 +425,7 @@ func (c *ldapConnector) Refresh(ctx context.Context, s connector.Scopes, ident c
 	if err != nil {
 		return ident, err
 	}
-	if user.DN != data.Entry.DN {
+	if strings.ToLower(user.DN) != strings.ToLower(data.Entry.DN) {
 		return ident, fmt.Errorf("ldap: refresh for username %q expected DN %q got %q", data.Username, data.Entry.DN, user.DN)
 	}
 
@@ -435,7 +436,7 @@ func (c *ldapConnector) Refresh(ctx context.Context, s connector.Scopes, ident c
 	newIdent.ConnectorData = ident.ConnectorData
 
 	if s.Groups {
-		groups, err := c.groups(ctx, user)
+		groups, err := c.Groups(ctx, user)
 		if err != nil {
 			return connector.Identity{}, fmt.Errorf("ldap: failed to query groups: %v", err)
 		}
@@ -444,7 +445,7 @@ func (c *ldapConnector) Refresh(ctx context.Context, s connector.Scopes, ident c
 	return newIdent, nil
 }
 
-func (c *ldapConnector) groups(ctx context.Context, user ldap.Entry) ([]string, error) {
+func (c *LDAPConnector) Groups(ctx context.Context, user ldap.Entry) ([]string, error) {
 	if c.GroupSearch.BaseDN == "" {
 		c.logger.Debugf("No groups returned for %q because no groups baseDN has been configured.", getAttr(user, c.UserSearch.NameAttr))
 		return nil, nil
