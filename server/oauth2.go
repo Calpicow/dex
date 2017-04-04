@@ -21,7 +21,6 @@ import (
 	jose "gopkg.in/square/go-jose.v2"
 
 	"github.com/coreos/dex/connector"
-	"github.com/coreos/dex/server/internal"
 	"github.com/coreos/dex/storage"
 )
 
@@ -266,20 +265,20 @@ func (s *Server) newIDToken(clientID string, claims storage.Claims, scopes []str
 	issuedAt := s.now()
 	expiry = issuedAt.Add(s.idTokensValidFor)
 
-	sub := &internal.IDTokenSubject{
-		UserId: claims.UserID,
-		ConnId: connID,
-	}
+	// sub := &internal.IDTokenSubject{
+	// 	UserId: claims.UserID,
+	// 	ConnId: connID,
+	// }
 
-	subjectString, err := internal.Marshal(sub)
-	if err != nil {
-		s.logger.Errorf("failed to marshal offline session ID: %v", err)
-		return "", expiry, fmt.Errorf("failed to marshal offline session ID: %v", err)
-	}
+	// subjectString, err := internal.Marshal(sub)
+	// if err != nil {
+	// 	s.logger.Errorf("failed to marshal offline session ID: %v", err)
+	// 	return "", expiry, fmt.Errorf("failed to marshal offline session ID: %v", err)
+	// }
 
 	tok := idTokenClaims{
 		Issuer:   s.issuerURL.String(),
-		Subject:  subjectString,
+		Subject:  claims.UserID,
 		Nonce:    nonce,
 		Expiry:   expiry.Unix(),
 		IssuedAt: issuedAt.Unix(),
