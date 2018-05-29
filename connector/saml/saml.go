@@ -399,10 +399,12 @@ func (p *provider) HandlePOST(s connector.Scopes, samlResponse, inResponseTo str
 
 	// Grab the email.
 	if ident.Email, _ = attributes.get(p.emailAttr); ident.Email == "" {
-		return ident, fmt.Errorf("no attribute with name %q: %s", p.emailAttr, attributes.names())
+		// TODO(ericchiang): Does SAML have an email_verified equivalent?
+		ident.EmailVerified = false
+		// return ident, fmt.Errorf("no attribute with name %q: %s", p.emailAttr, attributes.names())
+	} else {
+		ident.EmailVerified = true
 	}
-	// TODO(ericchiang): Does SAML have an email_verified equivalent?
-	ident.EmailVerified = true
 
 	// Grab the username.
 	if ident.Username, _ = attributes.get(p.usernameAttr); ident.Username == "" {
